@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1.0">
+		<title>Time Scratchpad</title>
+		<style>
+			body {
+				background-color: #1e1e1e;
+				font-family: Arial, sans-serif;
+			}
+			.gantt-chart {
+				display: flex;
+				flex-direction: column;
+				overflow-x: auto;
+				white-space: nowrap;
+				position: relative;
+				width: 100%;
+				height: 100%;
+				margin: 20px auto;
+				height: 700px;
+				background-color: #333;
+			}
+			.event {
+				position: absolute;
+				background-color: #4caf50;
+				color: #fff;
+				border-radius: 5px;
+				padding: 5px;
+				cursor: move;
+				box-sizing: border-box;
+				user-select: none;
+				white-space: nowrap;
+			}
+			.resize-handle {
+				position: absolute;
+				width: 5px;
+				height: 100%;
+				top: 0;
+				cursor: ew-resize;
+			}
+			.resize-handle.left {
+				left: -2px;
+			}
+			.resize-handle.right {
+				right: -2px;
+			}
+			.month-backdrop {
+				height: 28px;
+			}
+			.month-cell {
+				color: #fff;
+				border-right: 1px solid #fff;
+				user-select: none;
+				position: absolute;
+				background-color: #5f5f5f;
+			}
+			.month-label {
+				position: sticky;
+				left: 0;
+				padding: 5px;
+				display: inline-flex;
+				user-select: none;
+			}
+			.day-backdrop {
+				height: 100%;
+				min-width: 100%;
+				display: flex;
+				position: sticky;
+				top: 0;
+			}
+			.day-cell {
+				color: #fff;
+				white-space: nowrap;
+				text-align: center;
+				border-right: 1px solid #fff;
+				padding-top: 5px;
+				flex-shrink: 0;
+				user-select: none;
+			}
+		</style>
+	</head>
+	<body>
+		<button id="clearBtn">Clear</button>
+
+		<div class="gantt-chart" id="ganttChart">
+			<div class="month-backdrop" id="monthHeader"></div>
+			<div class="day-backdrop" id="dayHeader"></div>
+		</div>
+		<script>
+			let eventIdCounter = 0;
+			let events = JSON.parse(localStorage.getItem('events')) || {};
+
+			let pixelsPerHour = 8 /*px*/;
+			let snapResolution = 2 /*1/n hour will be the resolution, e.g. 2 -> half hour*/;
+			let headerHeight = 28*2 /*px*/;
+			let eventHeight = 30 /*px*/;
+
+			if (Object.keys(events).length === 0)
+			{
+				addEvent(-1, 'A', 0, 12, 0);
+				addEvent(-1, 'B', 13, 12, 0);
+				addEvent(-1, 'C', 12, 24, 1);
+				addEvent(-1, 'D', 18, 30, 2);
+			} else {
+				Object.keys(events).forEach(id => addEvent(+id, events[id].name, events[id].start, events[id].duration, events[id].row));
+			}
+
+			document.getElementById('clearBtn').addEventListener('click', () => {
+				events = {};
+				localStorage.setItem('events', '{}');
+				eventIdCounter = 0;
+				document.querySelectorAll('.event').forEach(event => event.remove());
+			});
+
+			function addEvent(id, name, start, duration, row) {
+				const ganttChart = document.getElementById('ganttChart');
+				const eventDiv = document.createElement('div');
+				eventDiv.classList.add('event');
+				eventDiv.innerHTML = name;
+
+				eventDiv.style.width = duration*pixelsPerHour + 'px';
+				eventDiv.style.left = start*pixelsPerHour + 'px';
+				eventDiv.style.top = (row*eventHeight + headerHeight) + 'px';
+
+				let isDragging = false;
+				let startX, startLeft;
+
+				eventDiv.addEventListener('mousedown', function(e) {
+					activeEventId = eventDiv.id;
+					isDragging = true;
+					startX = e.clientX;
+					startLeft = parseFloat(getComputedStyle(eventDiv).left);
+				});
+
+				// Función para cambiar el nombre al hacer doble clic
+				eventDiv.addEventListener('dblclick', function(e) {
+					let currentName = eventDiv.textContent;
+					let newName = prompt("Enter new name:", currentName);
+					if (newName) {
+						eventDiv.textContent = newName;
+						events[activeEventId].name = newName;
+						localStorage.setItem('events', JSON.stringify(events));
+					}
+					e.stopPropagation();
+				});
+
+				// Add resize handles
+				const resizeHandleLeft = document.createElement('div');
+				resizeHandleLeft.classList.add('resize-handle', 'left');
+				eventDiv.appendChild(resizeHandleLeft);
+
+				const resizeHandleRight = document.createElement('div');
+				resizeHandleRight.classList.add('resize-handle', 'right');
+				eventDiv.appendChild(resizeHandleRight);
+
+				let isResizingLeft = false;
+				let isResizingRight = false;
+				let startWidth;
+
+				resizeHandleLeft.addEventListener('mousedown', function(e) {
+					activeEventId = eventDiv.id;
+					isResizingLeft = true;
+					startX = e.clientX;
+					startWidth = parseFloat(getComputedStyle(eventDiv).width);
+					startLeft = parseFloat(eventDiv.style.left);
+
+					// Avoid mousedown from the event div to trigger
+					e.stopPropagation()
+				});
+
+				resizeHandleRight.addEventListener('mousedown', function(e) {
+					activeEventId = eventDiv.id;
+					isResizingRight = true;
+					startX = e.clientX;
+					startWidth = parseFloat(getComputedStyle(eventDiv).width);
+					startLeft = parseFloat(eventDiv.style.left);
+
+					e.stopPropagation()
+				});
+
+				document.addEventListener('mousemove', function(e) {
+					const minWidth = pixelsPerHour/snapResolution;
+
+					if (isDragging) {
+						const diffX = stepRound(e.clientX - startX, minWidth);
+						const newLeft = startLeft + diffX;
+						eventDiv.style.left = newLeft + 'px';
+
+						events[activeEventId].start = newLeft/pixelsPerHour;
+
+					} else if (isResizingLeft) {
+						const diffX = stepRound(e.clientX - startX, minWidth);
+						const newWidth = startWidth - diffX;
+						const newLeft = startLeft + diffX;
+
+						if (newWidth >= minWidth) {
+							eventDiv.style.width = newWidth + 'px';
+							eventDiv.style.left = newLeft + 'px';
+
+							events[activeEventId].start = newLeft/pixelsPerHour;
+							events[activeEventId].duration = newWidth/pixelsPerHour;
+						}
+
+					} else if (isResizingRight) {
+						const diffX = stepRound(e.clientX - startX, minWidth);
+						const newWidth = startWidth + diffX;
+
+						if (newWidth >= minWidth) {
+							eventDiv.style.width = newWidth + 'px';
+
+							events[activeEventId].duration = newWidth/pixelsPerHour;
+						}
+					}
+				});
+
+				document.addEventListener('mouseup', function() {
+					isDragging = false;
+					isResizingLeft = false;
+					isResizingRight = false;
+
+					localStorage.setItem('events', JSON.stringify(events));
+				});
+
+				ganttChart.appendChild(eventDiv);
+
+				if (id == -1) {
+					eventIdCounter++;
+					id = eventIdCounter;
+				} else {
+					eventIdCounter = Math.max(id+1, eventIdCounter);
+				}
+
+				eventDiv.id = id;
+
+				events[id] = {
+					name: name,
+					start: start,
+					duration: duration,
+					row: row
+				};
+				localStorage.setItem('events', JSON.stringify(events));
+			}
+
+			function stepRound(n, resolution) {
+				return Math.round(n / resolution) * resolution;
+			}
+
+			function createDayBackdrop(startDate, endDate) {
+				// This must match the CSS
+				const borderWidth = 1 /*px*/;
+
+				const days = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+
+				const ganttChart = document.getElementById('ganttChart');
+
+				const monthHeader = document.getElementById('monthHeader');
+				monthHeader.innerHTML = '';
+
+				const dayHeader = document.getElementById('dayHeader');
+				dayHeader.innerHTML = '';
+
+				const endDateObj = new Date(endDate);
+
+				let daysForMonth = [];
+
+				let currentDate = new Date(startDate);
+				let monthCount = -1;
+				let prevMonth = -1;
+				let currMonth = currentDate.getMonth();
+				while (currentDate <= endDateObj) {
+					const day = days[currentDate.getDay()];
+					const date = currentDate.getDate();
+					const month = currentDate.toLocaleString('en-us', { month: 'long' });
+
+					if (prevMonth != currMonth) {
+						monthCount++;
+						daysForMonth[monthCount] = 0;
+					}
+
+					daysForMonth[monthCount]++;
+
+					const dayCell = document.createElement('div');
+					dayCell.classList.add('day-cell');
+					dayCell.style.width = 24*pixelsPerHour - borderWidth + 'px';
+					dayCell.textContent = `${day} ${date}`;
+					dayHeader.appendChild(dayCell);
+
+					if (currentDate.getDay() == 0 || currentDate.getDay() == 6) {
+						dayCell.style.backgroundColor = '#474747';
+					}
+
+					currentDate.setDate(currentDate.getDate() + 1);
+					prevMonth = currMonth;
+					currMonth = currentDate.getMonth();
+				}
+
+				monthCount = 0;
+				currentDate = new Date(startDate);
+				let currPos = 0;
+				while (currentDate.getMonth() <= endDateObj.getMonth()) {
+					const month = currentDate.toLocaleString('en-us', { month: 'long' });
+
+					const monthDiv = document.createElement('div');
+					monthDiv.classList.add('month-cell');
+
+					let monthWidth = 24*pixelsPerHour*daysForMonth[monthCount];
+					monthDiv.style.width = monthWidth - borderWidth + 'px';
+					monthDiv.style.left = currPos + 'px';
+					currPos += monthWidth;
+
+					const monthLabel = document.createElement('div');
+					monthLabel.classList.add('month-label');
+					monthLabel.textContent = `${month} ${currentDate.getFullYear()}`;
+
+					monthDiv.appendChild(monthLabel);
+					monthHeader.appendChild(monthDiv);
+
+					currentDate.setMonth(currentDate.getMonth() + 1);
+					monthCount++;
+				}
+			}
+
+			const startDate = new Date('2024-07-24');
+			const endDate = new Date('2024-09-05');
+			createDayBackdrop(startDate, endDate);
+		</script>
+	</body>
+</html>
